@@ -1,0 +1,13 @@
+# Ignorar el archivo de autenticación
+auth_info_baileys
+
+# Ignorar la carpeta de dependencias de Node.js
+node_modules/
+
+# Ignorar los archivos de lock para dependencias (aunque puedes optar por no ignorar package-lock.json si prefieres compartirlo)
+package-lock.json
+
+# Otros archivos que puedes querer ignorar
+.DS_Store
+npm-debug.log
+
