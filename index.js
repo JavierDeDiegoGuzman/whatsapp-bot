@@ -37,66 +37,91 @@ async function transcribeAudio(buffer, language = 'es') {
 }
 
 async function connectToWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  let state, saveCreds;
 
-  const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true,
-  });
-
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
-    if (connection === 'close') {
-      const error = (lastDisconnect && lastDisconnect.error) ? lastDisconnect.error : null;
-      const shouldReconnect = error instanceof Boom ? error.output.statusCode !== DisconnectReason.loggedOut : true;
-
-      console.log('Connection closed due to', error, ', reconnecting', shouldReconnect);
-
-      if (shouldReconnect) {
-        connectToWhatsApp();
-      }
-    } else if (connection === 'open') {
-      console.log('Connection opened');
+  try {
+    // Load authentication state
+    ({ state, saveCreds } = await useMultiFileAuthState('auth_info_baileys'));
+    
+    if (!state) {
+      console.error('Authentication state is null or undefined.');
+      return;
     }
-  });
 
-  // Escuchar mensajes entrantes
-  sock.ev.on('messages.upsert', async (m) => {
-    const msg = m.messages[0];
+    const sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: true, // This ensures the QR code is printed for manual login if necessary
+    });
 
-    // Verificar si el mensaje es nuestro o si ya hemos respondido
-    if (!msg.message || msg.key.fromMe || respondedMessages.has(msg.key.id)) return;
+    // Handle connection updates
+    sock.ev.on('connection.update', (update) => {
+      const { connection, lastDisconnect } = update;
 
-    // Verificar si el mensaje es un audio
-    if (msg.message.audioMessage) {
-      console.log('Received an audio message');
+      // Check if connection is closed
+      if (connection === 'close') {
+        const error = (lastDisconnect && lastDisconnect.error) ? lastDisconnect.error : null;
+        const shouldReconnect = error instanceof Boom ? error.output.statusCode !== DisconnectReason.loggedOut : true;
 
-      const jid = msg.key.remoteJid;
+        console.log('Connection closed due to', error, ', reconnecting', shouldReconnect);
 
-      // Enviar el mensaje de texto "transcribiendo audio"
-      await sock.sendMessage(jid, { text: "Transcribiendo audio..." });
+        // Check if the error was caused by unauthorized (401)
+        if (error && error.output && error.output.statusCode === 401) {
+          console.error('Connection failure due to unauthorized (401). Check your credentials.');
+          return; // Don't attempt to reconnect on authorization failure
+        }
 
-      try {
-        // Descargar el audio sin guardar archivo, solo en buffer
-        const buffer = await downloadMediaMessage(msg, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
-
-        // Transcribir el audio usando la API de OpenAI, especificando el idioma en español ('es')
-        const transcription = await transcribeAudio(buffer, 'es');
-        console.log('Transcription:', transcription);
-
-        // Enviar la transcripción de vuelta al usuario
-        await sock.sendMessage(jid, { text: `Transcripción: ${transcription}` });
-      } catch (error) {
-        await sock.sendMessage(jid, { text: 'Error al transcribir el audio.' });
+        // Reconnect only if logged out or not an unauthorized issue
+        if (shouldReconnect) {
+          connectToWhatsApp();
+        }
+      } else if (connection === 'open') {
+        console.log('Connection opened successfully');
       }
+    });
 
-      // Marcar el mensaje como procesado
-      respondedMessages.add(msg.key.id);
-    }
-  });
+    // Listen for incoming messages
+    sock.ev.on('messages.upsert', async (m) => {
+      const msg = m.messages[0];
 
-  sock.ev.on('creds.update', saveCreds);
+      // Skip messages that are from self or already processed
+      if (!msg.message || msg.key.fromMe || respondedMessages.has(msg.key.id)) return;
+
+      // Check if the message is an audio
+      if (msg.message.audioMessage) {
+        console.log('Received an audio message');
+
+        const jid = msg.key.remoteJid;
+
+        // Send transcription status
+        await sock.sendMessage(jid, { text: "Transcribiendo audio..." });
+
+        try {
+          // Download audio without saving file, just as buffer
+          const buffer = await downloadMediaMessage(msg, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
+
+          // Transcribe the audio using OpenAI's Whisper model
+          const transcription = await transcribeAudio(buffer, 'es');
+          console.log('Transcription:', transcription);
+
+          // Send the transcription back to the user
+          await sock.sendMessage(jid, { text: `Transcripción: ${transcription}` });
+        } catch (error) {
+          await sock.sendMessage(jid, { text: 'Error al transcribir el audio.' });
+        }
+
+        // Mark message as processed
+        respondedMessages.add(msg.key.id);
+      }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+  } catch (error) {
+    console.error('Error initializing WhatsApp connection:', error);
+  }
 }
 
+// Start the connection
 connectToWhatsApp();
+
 
