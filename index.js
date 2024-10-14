@@ -7,7 +7,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const express = require('express');
 const qrcode = require('qrcode');
-const { addPageToNotion } = require('./libs/notion'); // Import the Notion function
+const { addPageToNotion } = require('./libs/notion'); // Importar la función para guardar en Notion
 
 const app = express();
 const PORT = 3000;
@@ -15,7 +15,7 @@ const PORT = 3000;
 let connectionStatus = "Disconnected";
 let qrCode = null;  // Variable para almacenar el código QR si es necesario
 
-// Function to transcribe the audio using OpenAI Whisper
+// Función para transcribir audio usando OpenAI Whisper
 async function transcribeAudio(buffer, language = 'es') {
   const formData = new FormData();
   formData.append('file', buffer, {
@@ -39,17 +39,19 @@ async function transcribeAudio(buffer, language = 'es') {
   }
 }
 
-// Function to send a message to ChatGPT for text improvement
+// Función para mejorar texto usando ChatGPT
 async function improveTextWithChatGPT(transcription) {
-  const prompt = `Estás editando la transcripción de una conversación en la que se discuten estrategias de marketing y organización de contenido. Quiero que transformes esta transcripción en un texto legible, coherente y bien estructurado, eliminando repeticiones, errores gramaticales, y frases innecesarias. Mantén el tono informal y el contenido clave. A continuación, te proporciono la transcripción original:
+const prompt = `Eres un asistente encargado de mejorar la calidad de una transcripción de audio. Tu tarea es tomar la transcripción original que se te proporciona y hacer lo siguiente:
+  
+  1. Corrige cualquier error gramatical.
+  2. Reorganiza frases si es necesario para que el texto sea fluido y claro.
+  3. Elimina cualquier redundancia o repetición innecesaria.
+  4. Mantén el tono conversacional y natural.
+  
+  Aquí está la transcripción original:
 
-  ${transcription}
+  "${transcription}"`;
 
-  Objetivos para el texto legible:
-  Estructura clara y fluida.
-  Elimina las frases repetitivas o sin sentido.
-  Organiza las ideas en párrafos según su lógica.
-  Mantén la intención y tono del original.`;
 
   try {
     const response = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -79,11 +81,7 @@ async function improveTextWithChatGPT(transcription) {
   }
 }
 
-
-
-
-
-// WhatsApp connection function
+// Función para conectar a WhatsApp
 async function connectToWhatsApp() {
   let state, saveCreds;
 
@@ -140,14 +138,36 @@ async function connectToWhatsApp() {
           const buffer = await downloadMediaMessage(msg, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
           const transcription = await transcribeAudio(buffer, 'es');
 
-          // Improve transcription using ChatGPT
+          // Mejorar transcripción usando ChatGPT
           const improvedText = await improveTextWithChatGPT(transcription);
 
-          // Send the improved transcription back to the user
-          await sock.sendMessage(jid, { text: improvedText});
+          // Enviar la transcripción mejorada de vuelta al usuario
+          await sock.sendMessage(jid, { text: improvedText });
 
         } catch (error) {
           await sock.sendMessage(jid, { text: 'Error al procesar el audio.' });
+        }
+      }
+
+      // Guardar en Notion si el mensaje es una respuesta con "save nombre" (case insensitive)
+      if (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text.toLowerCase().startsWith('save ')) {
+        const originalMessage = msg.message.extendedTextMessage.contextInfo.quotedMessage.conversation;
+        const fileName = msg.message.extendedTextMessage.text.substring(5).trim(); // Obtener todo lo que sigue a 'save '
+
+        if (!fileName) {
+          await sock.sendMessage(jid, { text: 'Por favor, proporciona un nombre de archivo.' });
+          return;
+        }
+
+        try {
+          // Guardar en Notion
+          const notionResponse = await addPageToNotion(process.env.NOTION_DATABASE_ID, fileName, originalMessage);
+
+          // Construir manualmente el URL de la página guardada
+          const pageUrl = `https://www.notion.so/${notionResponse.id.replace(/-/g, '')}`;
+          await sock.sendMessage(jid, { text: `Contenido guardado en Notion: ${pageUrl}` });
+        } catch (error) {
+          await sock.sendMessage(jid, { text: 'Error al guardar en Notion.' });
         }
       }
     });
