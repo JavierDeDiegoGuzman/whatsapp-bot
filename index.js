@@ -41,7 +41,7 @@ async function transcribeAudio(buffer, language = 'es') {
 
 // Función para mejorar texto usando ChatGPT
 async function improveTextWithChatGPT(transcription) {
-const prompt = `Eres un asistente encargado de mejorar la calidad de una transcripción de audio. Tu tarea es tomar la transcripción original que se te proporciona y hacer lo siguiente:
+  const prompt = `Eres un asistente encargado de mejorar la calidad de una transcripción de audio. Tu tarea es tomar la transcripción original que se te proporciona y hacer lo siguiente:
   
   1. Corrige cualquier error gramatical.
   2. Reorganiza frases si es necesario para que el texto sea fluido y claro.
@@ -51,7 +51,6 @@ const prompt = `Eres un asistente encargado de mejorar la calidad de una transcr
   Aquí está la transcripción original:
 
   "${transcription}"`;
-
 
   try {
     const response = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -78,6 +77,40 @@ const prompt = `Eres un asistente encargado de mejorar la calidad de una transcr
   } catch (error) {
     console.error('Error al mejorar el texto con ChatGPT:', error.response ? error.response.data : error.message);
     throw new Error('Error al mejorar el texto');
+  }
+}
+
+// Función para resumir texto usando ChatGPT
+async function summarizeWithChatGPT(text) {
+  const prompt = `Por favor, resume el siguiente texto en bullet points claros y concisos. Asegúrate de incluir los puntos más importantes sin perder el contexto principal:
+
+  "${text}"`;
+
+  try {
+    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: 'Eres un asistente que resume textos largos en puntos clave.' },
+        { role: 'user', content: prompt }
+      ],
+      max_tokens: 1024,
+      temperature: 0.7,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+    });
+
+    // Validar si la respuesta contiene el formato esperado
+    if (response.data && response.data.choices && response.data.choices.length > 0) {
+      return response.data.choices[0].message.content.trim();
+    } else {
+      console.error('La respuesta de la API no contiene datos válidos:', response.data);
+      throw new Error('Respuesta inválida de la API de OpenAI');
+    }
+  } catch (error) {
+    console.error('Error al resumir el texto con ChatGPT:', error.response ? error.response.data : error.message);
+    throw new Error('Error al resumir el texto');
   }
 }
 
@@ -168,6 +201,19 @@ async function connectToWhatsApp() {
           await sock.sendMessage(jid, { text: `Contenido guardado en Notion: ${pageUrl}` });
         } catch (error) {
           await sock.sendMessage(jid, { text: 'Error al guardar en Notion.' });
+        }
+      }
+
+      // Comando para resumir el texto
+      if (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text.toLowerCase().startsWith('resume')) {
+        const originalMessage = msg.message.extendedTextMessage.contextInfo.quotedMessage.conversation;
+
+        try {
+          // Resumir el mensaje original usando ChatGPT
+          const summary = await summarizeWithChatGPT(originalMessage);
+          await sock.sendMessage(jid, { text: `Resumen del contenido:\n\n${summary}` });
+        } catch (error) {
+          await sock.sendMessage(jid, { text: 'Error al resumir el contenido.' });
         }
       }
     });
