@@ -7,6 +7,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const express = require('express');
 const qrcode = require('qrcode');
+const { addPageToNotion } = require('./libs/notion'); // Import the Notion function
 
 const app = express();
 const PORT = 3000;
@@ -14,7 +15,7 @@ const PORT = 3000;
 let connectionStatus = "Disconnected";
 let qrCode = null;  // Variable para almacenar el código QR si es necesario
 
-// Función para transcribir el audio utilizando OpenAI Whisper con idioma especificado
+// Function to transcribe the audio using OpenAI Whisper
 async function transcribeAudio(buffer, language = 'es') {
   const formData = new FormData();
   formData.append('file', buffer, {
@@ -38,12 +39,57 @@ async function transcribeAudio(buffer, language = 'es') {
   }
 }
 
+// Function to send a message to ChatGPT for text improvement
+async function improveTextWithChatGPT(transcription) {
+  const prompt = `Estás editando la transcripción de una conversación en la que se discuten estrategias de marketing y organización de contenido. Quiero que transformes esta transcripción en un texto legible, coherente y bien estructurado, eliminando repeticiones, errores gramaticales, y frases innecesarias. Mantén el tono informal y el contenido clave. A continuación, te proporciono la transcripción original:
+
+  ${transcription}
+
+  Objetivos para el texto legible:
+  Estructura clara y fluida.
+  Elimina las frases repetitivas o sin sentido.
+  Organiza las ideas en párrafos según su lógica.
+  Mantén la intención y tono del original.`;
+
+  try {
+    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: 'Eres un asistente que mejora transcripciones de texto.' },
+        { role: 'user', content: prompt }
+      ],
+      max_tokens: 1024,
+      temperature: 0.7,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+    });
+
+    // Validar si la respuesta contiene el formato esperado
+    if (response.data && response.data.choices && response.data.choices.length > 0) {
+      return response.data.choices[0].message.content.trim();
+    } else {
+      console.error('La respuesta de la API no contiene datos válidos:', response.data);
+      throw new Error('Respuesta inválida de la API de OpenAI');
+    }
+  } catch (error) {
+    console.error('Error al mejorar el texto con ChatGPT:', error.response ? error.response.data : error.message);
+    throw new Error('Error al mejorar el texto');
+  }
+}
+
+
+
+
+
+// WhatsApp connection function
 async function connectToWhatsApp() {
   let state, saveCreds;
 
   try {
     ({ state, saveCreds } = await useMultiFileAuthState('auth_info_baileys'));
-    
+
     if (!state) {
       console.error('Authentication state is null or undefined.');
       return;
@@ -85,16 +131,23 @@ async function connectToWhatsApp() {
       const msg = m.messages[0];
       if (!msg.message || msg.key.fromMe) return;
 
+      const jid = msg.key.remoteJid;
+
       if (msg.message.audioMessage) {
-        const jid = msg.key.remoteJid;
         await sock.sendMessage(jid, { text: "Transcribiendo audio..." });
 
         try {
           const buffer = await downloadMediaMessage(msg, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
           const transcription = await transcribeAudio(buffer, 'es');
-          await sock.sendMessage(jid, { text: `Transcripción: ${transcription}` });
+
+          // Improve transcription using ChatGPT
+          const improvedText = await improveTextWithChatGPT(transcription);
+
+          // Send the improved transcription back to the user
+          await sock.sendMessage(jid, { text: improvedText});
+
         } catch (error) {
-          await sock.sendMessage(jid, { text: 'Error al transcribir el audio.' });
+          await sock.sendMessage(jid, { text: 'Error al procesar el audio.' });
         }
       }
     });
